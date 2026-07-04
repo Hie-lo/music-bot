@@ -10,9 +10,9 @@ sys.path.insert(0, str(Path(__file__).parent))
 from pyrogram import Client, filters
 from pyrogram.types import Message, InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery
 from config import Config
-from handlers.play_handler import PlayHandler
-from handlers.admin_handler import AdminHandler
-from handlers.control_handler import ControlHandler
+from search import SearchManager
+from player import MusicPlayer
+import re
 
 # ایجاد پوشه logs اگر وجود نداشت
 if not os.path.exists('logs'):
@@ -29,6 +29,10 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+# ایجاد نمونه از کلاس‌ها
+search_manager = SearchManager()
+music_player = MusicPlayer(None)  # موقتاً None
+
 class MusicBot:
     def __init__(self):
         self.app = Client(
@@ -37,37 +41,18 @@ class MusicBot:
             api_hash=Config.API_HASH,
             bot_token=Config.BOT_TOKEN
         )
-        
-        # نمونه‌سازی هندلرها
-        self.play_handler = PlayHandler(self.app)
-        self.admin_handler = AdminHandler(self.app)
-        self.control_handler = ControlHandler(self.app)
+        # به‌روزرسانی music_player با app
+        global music_player
+        music_player = MusicPlayer(self.app)
+        self.music_player = music_player
+        self.search_manager = search_manager
     
     async def start(self):
         """شروع ربات"""
         logger.info("🚀 ربات موزیک پلیر در حال راه‌اندازی...")
         
-        # ========== ثبت دستورات اصلی با استفاده از filters.text ==========
-        
-        # دستور start و help
-        @self.app.on_message(filters.command(["start", "help"]) & (filters.private | filters.group))
-        async def start_command(client, message: Message):
-            await self.send_welcome(message)
-        
-        # دستورات فارسی با filters.text
-        @self.app.on_message(filters.text & filters.group)
-        async def handle_text_messages(client, message: Message):
-            await self.handle_text_message(message)
-        
-        # ========== ثبت هندلرهای callback ==========
-        @self.app.on_callback_query()
-        async def callback_handler(client, callback_query: CallbackQuery):
-            await self.handle_callback(callback_query)
-        
-        # ========== ثبت هندلرهای اختصاصی ==========
-        self.play_handler.register_handlers()
-        self.admin_handler.register_handlers()
-        self.control_handler.register_handlers()
+        # ========== ثبت هندلرها ==========
+        self.register_handlers()
         
         # ========== راه‌اندازی ربات ==========
         logger.info("✅ ربات آماده کار است!")
@@ -79,50 +64,420 @@ class MusicBot:
         # نگه‌داشتن ربات در حالت اجرا
         await asyncio.Event().wait()
     
-    async def stop(self):
-        """توقف ربات"""
-        logger.info("🛑 ربات در حال توقف...")
-        await self.app.stop()
-        logger.info("✅ ربات متوقف شد")
+    def register_handlers(self):
+        """ثبت همه هندلرها"""
+        app = self.app
+        
+        # ========== 1. دستور start ==========
+        @app.on_message(filters.command(["start", "help"]))
+        async def start_command(client, message: Message):
+            await self.send_welcome(message)
+        
+        # ========== 2. دستور پخش ==========
+        @app.on_message(filters.text & filters.group)
+        async def handle_messages(client, message: Message):
+            text = message.text or ""
+            
+            # پخش با ریپلای
+            if text == "پخش" and message.reply_to_message:
+                await self.handle_play_reply(message)
+                return
+            
+            # پخش لینک
+            if text.startswith("پخش لینک "):
+                link = text[8:].strip()
+                await self.handle_play_link(message, link)
+                return
+            
+            # پخش در پلتفرم خاص
+            platform_match = re.match(r'^پخش (یوتیوب|اسپاتیفای|ساندکلاد) (.+)$', text)
+            if platform_match:
+                platform = platform_match.group(1)
+                query = platform_match.group(2)
+                await self.handle_play_platform(message, platform, query)
+                return
+            
+            # پخش معمولی
+            if text.startswith("پخش "):
+                query = text[3:].strip()
+                await self.handle_play(message, query)
+                return
+            
+            # دستورات کنترلی
+            if text == "توقف":
+                await self.pause_song(message)
+                return
+            if text == "ادامه":
+                await self.resume_song(message)
+                return
+            if text == "بعدی":
+                await self.skip_song(message)
+                return
+            if text == "اتمام":
+                await self.stop_song(message)
+                return
+            if text == "لیست پخش":
+                await self.show_queue(message)
+                return
+            
+            # دستورات مدیریتی
+            if text.startswith("افزودن ادمین موزیک "):
+                await self.add_admin(message)
+                return
+            if text.startswith("حذف ادمین موزیک "):
+                await self.remove_admin(message)
+                return
+            if text == "لیست ادمین‌ها":
+                await self.list_admins(message)
+                return
+        
+        # ========== 3. دکمه‌های شیشه‌ای ==========
+        @app.on_callback_query()
+        async def callback_handler(client, callback_query: CallbackQuery):
+            await self.handle_callback(callback_query)
+        
+        logger.info("✅ همه هندلرها ثبت شدند")
     
-    async def handle_text_message(self, message: Message):
-        """مدیریت پیام‌های متنی در گروه"""
-        text = message.text or ""
-        
-        # شروع با / رو نادیده بگیر (برای دستورات انگلیسی)
-        if text.startswith('/'):
-            return
-        
-        # دستورات فارسی
-        if text.startswith('پخش '):
-            # این توسط play_handler مدیریت میشه
-            pass
-        elif text == 'توقف':
-            await self.control_handler.pause_song(message)
-        elif text == 'ادامه':
-            await self.control_handler.resume_song(message)
-        elif text == 'بعدی':
-            await self.control_handler.skip_song(message)
-        elif text == 'اتمام':
-            await self.control_handler.stop_song(message)
-        elif text == 'لیست پخش':
-            await self.control_handler.show_queue(message)
+    # ========== توابع پخش ==========
+    
+    async def handle_play(self, message: Message, query: str):
+        """پخش با سرچ"""
+        try:
+            if not query:
+                await message.reply_text("❌ لطفاً نام موزیک را وارد کنید!")
+                return
+            
+            await message.reply_text(f"🔍 در حال جستجوی: {query}")
+            
+            results = await self.search_manager.search_with_fallback(query)
+            
+            if not results:
+                await message.reply_text("❌ موزیک مورد نظر پیدا نشد!")
+                return
+            
+            song = results[0]
+            audio_url = await self.search_manager.get_audio_url(song.url, song.platform)
+            
+            if not audio_url:
+                await message.reply_text("❌ خطا در دریافت لینک پخش!")
+                return
+            
+            success = await self.music_player.play_song(
+                message.chat.id,
+                audio_url,
+                song.to_dict()
+            )
+            
+            if success:
+                await self._send_play_message(message, song)
+            else:
+                await message.reply_text("❌ خطا در پخش موزیک!")
+                
+        except Exception as e:
+            logger.error(f"خطا در پخش: {e}")
+            await message.reply_text(f"❌ خطا: {str(e)}")
+    
+    async def handle_play_link(self, message: Message, link: str):
+        """پخش با لینک"""
+        try:
+            if not link:
+                await message.reply_text("❌ لطفاً لینک را وارد کنید!")
+                return
+            
+            platform = self._detect_platform(link)
+            audio_url = await self.search_manager.get_audio_url(link, platform)
+            
+            if not audio_url:
+                await message.reply_text("❌ خطا در دریافت لینک پخش!")
+                return
+            
+            song_info = {
+                'title': f"🎵 لینک پخش",
+                'url': link,
+                'duration': 0,
+                'artist': 'Unknown',
+                'platform': platform,
+                'thumbnail': ''
+            }
+            
+            success = await self.music_player.play_song(
+                message.chat.id,
+                audio_url,
+                song_info
+            )
+            
+            if success:
+                await self._send_play_message(message, song_info)
+            else:
+                await message.reply_text("❌ خطا در پخش موزیک!")
+                
+        except Exception as e:
+            logger.error(f"خطا در پخش لینک: {e}")
+            await message.reply_text(f"❌ خطا: {str(e)}")
+    
+    async def handle_play_platform(self, message: Message, platform: str, query: str):
+        """پخش در پلتفرم خاص"""
+        try:
+            results = await self.search_manager.search(query, platform)
+            
+            if not results:
+                await message.reply_text(f"⚠️ در {platform} پیدا نشد، جستجو در یوتیوب...")
+                results = await self.search_manager.search(query, 'youtube')
+            
+            if not results:
+                await message.reply_text("❌ موزیک مورد نظر پیدا نشد!")
+                return
+            
+            song = results[0]
+            audio_url = await self.search_manager.get_audio_url(song.url, song.platform)
+            
+            if not audio_url:
+                await message.reply_text("❌ خطا در دریافت لینک پخش!")
+                return
+            
+            success = await self.music_player.play_song(
+                message.chat.id,
+                audio_url,
+                song.to_dict()
+            )
+            
+            if success:
+                await self._send_play_message(message, song)
+            else:
+                await message.reply_text("❌ خطا در پخش موزیک!")
+                
+        except Exception as e:
+            logger.error(f"خطا در پخش پلتفرم: {e}")
+            await message.reply_text(f"❌ خطا: {str(e)}")
+    
+    async def handle_play_reply(self, message: Message):
+        """پخش با ریپلای"""
+        try:
+            msg = message.reply_to_message
+            if msg and msg.text:
+                results = await self.search_manager.search_with_fallback(msg.text)
+                if results:
+                    song = results[0]
+                    audio_url = await self.search_manager.get_audio_url(song.url, song.platform)
+                    if audio_url:
+                        await self.music_player.play_song(
+                            message.chat.id,
+                            audio_url,
+                            song.to_dict()
+                        )
+                        await self._send_play_message(message, song)
+            
+        except Exception as e:
+            logger.error(f"خطا در پخش ریپلای: {e}")
+            await message.reply_text(f"❌ خطا: {str(e)}")
+    
+    # ========== توابع کنترل ==========
+    
+    async def pause_song(self, message: Message):
+        try:
+            success = await self.music_player.pause_song(message.chat.id)
+            await message.reply_text("⏸️ پخش متوقف شد." if success else "❌ هیچ موزیکی در حال پخش نیست!")
+        except Exception as e:
+            await message.reply_text(f"❌ خطا: {str(e)}")
+    
+    async def resume_song(self, message: Message):
+        try:
+            success = await self.music_player.resume_song(message.chat.id)
+            await message.reply_text("▶️ پخش ادامه یافت." if success else "❌ هیچ موزیکی در حالت توقف نیست!")
+        except Exception as e:
+            await message.reply_text(f"❌ خطا: {str(e)}")
+    
+    async def skip_song(self, message: Message):
+        try:
+            next_song = await self.music_player.skip_song(message.chat.id)
+            if next_song:
+                await message.reply_text(
+                    f"⏭️ **آهنگ بعدی:**\n"
+                    f"🎵 {next_song.get('title', 'Unknown')}"
+                )
+            else:
+                await message.reply_text("⏹️ لیست پخش به پایان رسید.")
+        except Exception as e:
+            await message.reply_text(f"❌ خطا: {str(e)}")
+    
+    async def stop_song(self, message: Message):
+        try:
+            success = await self.music_player.stop_song(message.chat.id)
+            await message.reply_text("⏹️ پخش متوقف شد." if success else "❌ خطا در توقف پخش!")
+        except Exception as e:
+            await message.reply_text(f"❌ خطا: {str(e)}")
+    
+    async def show_queue(self, message: Message):
+        try:
+            queue_info = self.music_player.queue_manager.get_queue_info(message.chat.id)
+            await message.reply_text(queue_info)
+        except Exception as e:
+            await message.reply_text(f"❌ خطا: {str(e)}")
+    
+    # ========== توابع مدیریت ==========
+    
+    async def add_admin(self, message: Message):
+        try:
+            parts = message.text.split()
+            if len(parts) < 2:
+                await message.reply_text("❌ دستور صحیح: `افزودن ادمین موزیک [ایدی]`")
+                return
+            
+            user_id = int(parts[1]) if not message.reply_to_message else message.reply_to_message.from_user.id
+            
+            # بارگذاری و ذخیره ادمین‌ها
+            import json
+            admins = []
+            try:
+                with open(Config.ADMINS_FILE, 'r') as f:
+                    data = json.load(f)
+                    admins = data.get('admins', [])
+            except:
+                pass
+            
+            if user_id in admins:
+                await message.reply_text(f"⚠️ کاربر `{user_id}` قبلاً ادمین است!")
+                return
+            
+            admins.append(user_id)
+            with open(Config.ADMINS_FILE, 'w') as f:
+                json.dump({'admins': admins}, f, indent=2)
+            
+            await message.reply_text(f"✅ کاربر `{user_id}` به لیست ادمین‌ها اضافه شد.")
+        except Exception as e:
+            await message.reply_text(f"❌ خطا: {str(e)}")
+    
+    async def remove_admin(self, message: Message):
+        try:
+            parts = message.text.split()
+            if len(parts) < 2:
+                await message.reply_text("❌ دستور صحیح: `حذف ادمین موزیک [ایدی]`")
+                return
+            
+            user_id = int(parts[1]) if not message.reply_to_message else message.reply_to_message.from_user.id
+            
+            import json
+            admins = []
+            try:
+                with open(Config.ADMINS_FILE, 'r') as f:
+                    data = json.load(f)
+                    admins = data.get('admins', [])
+            except:
+                pass
+            
+            if user_id not in admins:
+                await message.reply_text(f"⚠️ کاربر `{user_id}` ادمین نیست!")
+                return
+            
+            admins.remove(user_id)
+            with open(Config.ADMINS_FILE, 'w') as f:
+                json.dump({'admins': admins}, f, indent=2)
+            
+            await message.reply_text(f"✅ کاربر `{user_id}` از لیست ادمین‌ها حذف شد.")
+        except Exception as e:
+            await message.reply_text(f"❌ خطا: {str(e)}")
+    
+    async def list_admins(self, message: Message):
+        try:
+            import json
+            admins = []
+            try:
+                with open(Config.ADMINS_FILE, 'r') as f:
+                    data = json.load(f)
+                    admins = data.get('admins', [])
+            except:
+                pass
+            
+            if not admins:
+                await message.reply_text("📋 لیست ادمین‌ها خالی است!")
+                return
+            
+            text = "👑 **لیست ادمین‌ها:**\n\n"
+            for i, admin_id in enumerate(admins, 1):
+                try:
+                    user = await self.app.get_users(admin_id)
+                    name = user.first_name or f"کاربر {admin_id}"
+                    text += f"{i}. {name} (`{admin_id}`)\n"
+                except:
+                    text += f"{i}. کاربر با ایدی `{admin_id}`\n"
+            
+            await message.reply_text(text)
+        except Exception as e:
+            await message.reply_text(f"❌ خطا: {str(e)}")
+    
+    # ========== توابع کمکی ==========
+    
+    async def _send_play_message(self, message: Message, song_info):
+        """ارسال پیام با اطلاعات آهنگ"""
+        from utils import create_play_message
+        text, keyboard = create_play_message(song_info, message.chat.id)
+        await message.reply_text(text, reply_markup=keyboard, disable_web_page_preview=True)
+    
+    async def handle_callback(self, callback_query: CallbackQuery):
+        """مدیریت دکمه‌های شیشه‌ای"""
+        try:
+            data = callback_query.data
+            chat_id = callback_query.message.chat.id
+            
+            if data.startswith("pause"):
+                await self.music_player.pause_song(chat_id)
+                await callback_query.answer("⏸️ پخش متوقف شد")
+            
+            elif data.startswith("resume"):
+                await self.music_player.resume_song(chat_id)
+                await callback_query.answer("▶️ پخش ادامه یافت")
+            
+            elif data.startswith("skip"):
+                next_song = await self.music_player.skip_song(chat_id)
+                if next_song:
+                    await callback_query.answer(f"⏭️ در حال پخش: {next_song.get('title')}")
+                else:
+                    await callback_query.answer("⏹️ لیست پخش به پایان رسید")
+            
+            elif data.startswith("stop"):
+                await self.music_player.stop_song(chat_id)
+                await callback_query.answer("⏹️ پخش متوقف شد")
+            
+            elif data.startswith("queue"):
+                queue_info = self.music_player.queue_manager.get_queue_info(chat_id)
+                await callback_query.answer("📋 لیست پخش ارسال شد")
+                await callback_query.message.reply_text(queue_info)
+            
+            elif data == "help":
+                await callback_query.answer("📖 راهنما")
+                await callback_query.message.reply_text(
+                    "📖 **راهنمای کامل ربات:**\n\n"
+                    "**دستورات پخش:**\n"
+                    "• `پخش [نام]` - جستجو در همه پلتفرم‌ها\n"
+                    "• `پخش یوتیوب [نام]` - فقط یوتیوب\n"
+                    "• `پخش اسپاتیفای [نام]` - فقط اسپاتیفای\n"
+                    "• `پخش لینک [لینک]` - پخش مستقیم لینک\n\n"
+                    "**کنترل پخش:**\n"
+                    "• `توقف` - مکث\n"
+                    "• `ادامه` - ادامه\n"
+                    "• `بعدی` - آهنگ بعدی\n"
+                    "• `اتمام` - توقف کامل\n"
+                    "• `لیست پخش` - نمایش صف"
+                )
+            
+            elif data == "status":
+                await callback_query.answer("📊 وضعیت ربات")
+                await callback_query.message.reply_text(
+                    "📊 **وضعیت ربات:**\n\n"
+                    "✅ **وضعیت:** آنلاین\n"
+                    "🎵 **در حال پخش:** -"
+                )
+            
+        except Exception as e:
+            logger.error(f"خطا در callback: {e}")
+            await callback_query.answer("❌ خطا!", show_alert=True)
     
     async def send_welcome(self, message: Message):
         """ارسال پیام خوش‌آمدگویی"""
-        
-        # متن پیام
         welcome_text = """
 🎵 **به ربات موزیک پلیر خوش آمدید!**
 
 من یک ربات قدرتمند برای پخش موسیقی در گروه‌های تلگرام هستم.
-
-✨ **قابلیت‌ها:**
-• پخش از یوتیوب، اسپاتیفای و ساندکلاد
-• پخش با لینک مستقیم
-• مدیریت صف پخش
-• کنترل کامل با دکمه‌های شیشه‌ای
-• پخش دسته‌جمعی با ریپلای
 
 📌 **دستورات اصلی:**
 • `پخش [نام موزیک]` - جستجو و پخش خودکار
@@ -131,82 +486,39 @@ class MusicBot:
 • `پخش اسپاتیفای [نام]` - جستجو در اسپاتیفای
 
 🎮 **کنترل پخش:**
-• `توقف` - مکث پخش
-• `ادامه` - ادامه پخش
+• `توقف` - مکث
+• `ادامه` - ادامه
 • `بعدی` - آهنگ بعدی
 • `اتمام` - توقف کامل
 • `لیست پخش` - نمایش صف
-
-👑 **مدیریت:**
-• `افزودن ادمین موزیک [ایدی]` - افزودن ادمین جدید
-
-💡 **نکته:** برای پخش چند موزیک، روی پیام‌ها ریپلای بزنید و `پخش` رو بفرستید.
 """
         
-        # دکمه‌ها
         keyboard = InlineKeyboardMarkup([
             [
                 InlineKeyboardButton("➕ افزودن به گروه", url="https://t.me/Player_Boy_bot?startgroup=true"),
-                InlineKeyboardButton("📢 کانال", url="https://t.me/your_channel"),
             ],
             [
                 InlineKeyboardButton("📖 راهنما", callback_data="help"),
                 InlineKeyboardButton("📊 وضعیت", callback_data="status"),
-            ],
-            [
-                InlineKeyboardButton("🧑‍💻 پشتیبانی", url="https://t.me/your_support"),
             ]
         ])
         
-        # ارسال پیام
-        await message.reply_text(
-            welcome_text,
-            reply_markup=keyboard,
-            disable_web_page_preview=True
-        )
+        await message.reply_text(welcome_text, reply_markup=keyboard)
     
-    async def handle_callback(self, callback_query: CallbackQuery):
-        """مدیریت دکمه‌های شیشه‌ای"""
-        data = callback_query.data
-        
-        if data == "help":
-            await callback_query.answer("📖 راهنما ارسال شد")
-            await callback_query.message.reply_text(
-                "📖 **راهنمای کامل ربات:**\n\n"
-                "**دستورات پخش:**\n"
-                "• `پخش [نام]` - جستجو در همه پلتفرم‌ها\n"
-                "• `پخش یوتیوب [نام]` - فقط یوتیوب\n"
-                "• `پخش اسپاتیفای [نام]` - فقط اسپاتیفای\n"
-                "• `پخش لینک [لینک]` - پخش مستقیم لینک\n\n"
-                "**کنترل پخش:**\n"
-                "• `توقف` - مکث\n"
-                "• `ادامه` - ادامه\n"
-                "• `بعدی` - آهنگ بعدی\n"
-                "• `اتمام` - توقف کامل\n\n"
-                "**مدیریت:**\n"
-                "• `افزودن ادمین موزیک [ایدی]` - افزودن ادمین\n"
-                "• `حذف ادمین موزیک [ایدی]` - حذف ادمین\n"
-                "• `لیست ادمین‌ها` - نمایش ادمین‌ها"
-            )
-        
-        elif data == "status":
-            await callback_query.answer("📊 وضعیت ربات")
-            await callback_query.message.reply_text(
-                "📊 **وضعیت ربات:**\n\n"
-                "✅ **وضعیت:** آنلاین\n"
-                "🎵 **در حال پخش:** -"
-            )
-        
-        else:
-            # هندل کردن دکمه‌های کنترلی
-            await self.control_handler.handle_callback(callback_query)
+    def _detect_platform(self, link: str) -> str:
+        if 'youtube.com' in link or 'youtu.be' in link:
+            return 'youtube'
+        elif 'spotify.com' in link:
+            return 'spotify'
+        elif 'soundcloud.com' in link:
+            return 'soundcloud'
+        return 'default'
 
 if __name__ == "__main__":
     bot = MusicBot()
     try:
         asyncio.run(bot.start())
     except KeyboardInterrupt:
-        logger.info("⏹️ ربات با دستور کاربر متوقف شد")
-        asyncio.run(bot.stop())
+        logger.info("⏹️ ربات متوقف شد")
     except Exception as e:
         logger.error(f"❌ خطا: {e}")
