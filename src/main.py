@@ -48,26 +48,30 @@ class MusicBot:
         await asyncio.Event().wait()
 
     def register_handlers(self):
-        """ثبت هندلرها با فیلتر گروه"""
+        """ثبت هندلر بدون فیلتر"""
         
-        # ===== هندلر پیام‌های گروه =====
-        @self.app.on_message(filters.text & filters.group)
-        async def group_messages(client, message: Message):
-            logger.info(f"📩 گروه: {message.text[:50]}")
-            await self.process_command(message)
+        @self.app.on_message()
+        async def all_messages(client, message: Message):
+            logger.info(f"📩 پیام: {message.text} | چت: {message.chat.id} | نوع: {message.chat.type}")
+            
+            # پاسخ تست
+            if message.text:
+                await message.reply_text(f"✅ دریافت شد: {message.text[:50]}")
+            
+            # پردازش دستورات
+            if message.chat.type in ["group", "supergroup"] and message.text:
+                await self.process_command(message)
+            elif message.chat.type == "private" and message.text:
+                if message.text.startswith("/start"):
+                    await self.send_welcome(message)
+                else:
+                    await message.reply_text("سلام! برای راهنما /start بفرستید.")
 
-        # ===== هندلر پیام‌های خصوصی =====
-        @self.app.on_message(filters.private & filters.text)
-        async def private_messages(client, message: Message):
-            if message.text.startswith("/start"):
-                await self.send_welcome(message)
-
-        # ===== هندلر دکمه‌ها =====
         @self.app.on_callback_query()
         async def callback_handler(client, callback_query: CallbackQuery):
             await self.handle_callback(callback_query)
 
-        logger.info("✅ هندلرها ثبت شدند")
+        logger.info("✅ هندلر ثبت شد")
 
     async def process_command(self, message: Message):
         text = message.text or ""
@@ -98,7 +102,7 @@ class MusicBot:
         elif text == "پخش" and message.reply_to_message:
             await self.handle_play_reply(message)
 
-    # ===== توابع پخش =====
+    # ===== توابع پخش (همان‌طور که بودند) =====
     async def handle_play(self, m, q):
         msg = await m.reply_text(f"🔍 در حال جستجو: {q}")
         results = await self.search_manager.search_with_fallback(q)
