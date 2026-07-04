@@ -3,28 +3,31 @@ import logging
 import os
 import re
 import json
+import traceback
 from typing import Dict, List, Optional
 
-from dotenv import load_dotenv  # ← اضافه شده برای خواندن env
+from dotenv import load_dotenv
 from pyrogram import Client, filters
 from pyrogram.types import Message, InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery
 
 # ========== بارگذاری فایل .env ==========
-load_dotenv()  # این خط فایل .env را پیدا و بارگذاری می‌کند
+load_dotenv()
 
-# ========== دریافت اطلاعات از محیط ==========
-API_ID = int(os.getenv("API_ID", 0))  # پیش‌فرض 0 در صورت نبودن
+API_ID = int(os.getenv("API_ID", 0))
 API_HASH = os.getenv("API_HASH")
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 
-# بررسی وجود اطلاعات (برای اطمینان)
 if not API_ID or not API_HASH or not BOT_TOKEN:
-    raise ValueError("❌ اطلاعات API_ID، API_HASH یا BOT_TOKEN در فایل .env پیدا نشد!")
+    raise ValueError("❌ اطلاعات API در فایل .env پیدا نشد!")
 
 ADMINS_FILE = "admins.json"
 
 # ========== لاگ ==========
-logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s - %(levelname)s - %(message)s",
+    handlers=[logging.FileHandler("logs/bot.log"), logging.StreamHandler()]
+)
 logger = logging.getLogger(__name__)
 
 # ========== کلاس مدیریت صف ==========
@@ -74,23 +77,31 @@ class QueueManager:
                 txt += f"... و {len(queue)-5} تا دیگر"
         return txt
 
-# ========== کلاس پخش (ساده) ==========
+# ========== کلاس پخش ==========
 class MusicPlayer:
     def __init__(self):
         self.queue = QueueManager()
 
     async def play(self, chat_id: int, song: Dict):
-        pos = self.queue.add(chat_id, song)
-        if pos == 0:
-            logger.info(f"🎵 در حال پخش: {song.get('title')}")
-        else:
-            logger.info(f"➕ به صف اضافه شد: {song.get('title')} (موقعیت {pos})")
+        try:
+            pos = self.queue.add(chat_id, song)
+            if pos == 0:
+                logger.info(f"🎵 در حال پخش: {song.get('title')}")
+                return "در حال پخش..."
+            else:
+                logger.info(f"➕ به صف اضافه شد: {song.get('title')} (موقعیت {pos})")
+                return f"به صف اضافه شد (موقعیت {pos})"
+        except Exception as e:
+            logger.error(f"خطا در play: {e}\n{traceback.format_exc()}")
+            return "خطا در پخش"
 
     async def pause(self, chat_id: int):
         logger.info(f"⏸️ توقف در {chat_id}")
+        return "توقف"
 
     async def resume(self, chat_id: int):
         logger.info(f"▶️ ادامه در {chat_id}")
+        return "ادامه"
 
     async def skip(self, chat_id: int) -> Optional[Dict]:
         return self.queue.next(chat_id)
@@ -98,23 +109,31 @@ class MusicPlayer:
     async def stop(self, chat_id: int):
         self.queue.clear(chat_id)
         logger.info(f"⏹️ توقف کامل در {chat_id}")
+        return "توقف کامل"
 
     def get_queue_info(self, chat_id: int) -> str:
         return self.queue.get_info(chat_id)
 
-# ========== کلاس جستجو (ساده) ==========
+# ========== کلاس جستجو ==========
 class SearchManager:
     async def search(self, query: str) -> List[Dict]:
-        # شبیه‌سازی جستجو - در نسخه واقعی از yt-dlp استفاده کن
-        return [{
-            "title": f"🎵 {query}",
-            "url": f"https://youtube.com/watch?v=test_{query}",
-            "duration": 180,
-            "artist": "Unknown",
-            "platform": "youtube"
-        }]
+        try:
+            # شبیه‌سازی جستجو - در نسخه واقعی از yt-dlp استفاده کنید
+            logger.info(f"🔍 جستجو برای: {query}")
+            # برای تست، یک نتیجه ساختگی برمی‌گردانیم
+            return [{
+                "title": f"🎵 {query} (ساختگی)",
+                "url": f"https://youtube.com/watch?v=test_{query}",
+                "duration": 180,
+                "artist": "Unknown Artist",
+                "platform": "youtube"
+            }]
+            # در آینده این را با yt-dlp واقعی جایگزین کنید
+        except Exception as e:
+            logger.error(f"خطا در جستجو: {e}\n{traceback.format_exc()}")
+            return []
 
-# ========== ربات اصلی ==========
+# ========== ربات ==========
 app = Client("music_bot", api_id=API_ID, api_hash=API_HASH, bot_token=BOT_TOKEN)
 player = MusicPlayer()
 searcher = SearchManager()
@@ -147,158 +166,183 @@ def create_play_message(song: Dict, chat_id: int):
     ])
     return text, kb
 
-# ========== هندلرها ==========
+# ========== هندلر اصلی ==========
 @app.on_message()
 async def all_messages(client, message: Message):
-    logger.info(f"📩 {message.text} | چت: {message.chat.id} | نوع: {message.chat.type}")
+    try:
+        # لاگ ساده
+        logger.info(f"📩 {message.text} | چت: {message.chat.id} | نوع: {message.chat.type}")
 
-    if not message.text:
-        return
+        if not message.text:
+            return
 
-    # پاسخ تست (برای اطمینان از دریافت)
-    if message.chat.type == "private" and not message.text.startswith("/"):
-        await message.reply_text("✅ پیامت دریافت شد! برای راهنما /start بفرست.")
-
-    # پردازش دستورات گروه
-    if message.chat.type in ["group", "supergroup"]:
-        text = message.text
-
-        # پخش
-        if text.startswith("پخش "):
-            query = text[3:].strip()
-            if not query:
-                await message.reply_text("❌ نام موزیک را وارد کن")
-                return
-            await message.reply_text(f"🔍 در حال جستجوی: {query}")
-            results = await searcher.search(query)
-            if not results:
-                await message.reply_text("❌ پیدا نشد")
-                return
-            song = results[0]
-            await player.play(message.chat.id, song)
-            txt, kb = create_play_message(song, message.chat.id)
-            await message.reply_text(txt, reply_markup=kb)
-
-        # کنترل
-        elif text == "توقف":
-            await player.pause(message.chat.id)
-            await message.reply_text("⏸️ توقف")
-        elif text == "ادامه":
-            await player.resume(message.chat.id)
-            await message.reply_text("▶️ ادامه")
-        elif text == "بعدی":
-            s = await player.skip(message.chat.id)
-            if s:
-                await message.reply_text(f"⏭️ {s.get('title')}")
+        # ===== پیوی =====
+        if message.chat.type == "private":
+            if message.text.startswith("/start"):
+                txt = (
+                    "🎵 **ربات موزیک پلیر**\n\n"
+                    "📌 **دستورات:**\n"
+                    "• `پخش [نام]`\n"
+                    "• `پخش لینک [لینک]`\n"
+                    "• `توقف` / `ادامه` / `بعدی` / `اتمام`\n"
+                    "• `لیست پخش`\n"
+                    "• `افزودن ادمین موزیک [ایدی]`"
+                )
+                kb = InlineKeyboardMarkup([
+                    [InlineKeyboardButton("➕ افزودن به گروه", url="https://t.me/Player_Boy_bot?startgroup=true")]
+                ])
+                await message.reply_text(txt, reply_markup=kb)
             else:
-                await message.reply_text("⏹️ پایان لیست")
-        elif text == "اتمام":
-            await player.stop(message.chat.id)
-            await message.reply_text("⏹️ توقف کامل")
-        elif text == "لیست پخش":
-            info = player.get_queue_info(message.chat.id)
-            await message.reply_text(info)
+                await message.reply_text("✅ پیامت دریافت شد! برای راهنما /start بفرست.")
+            return
 
-        # ادمین
-        elif text.startswith("افزودن ادمین موزیک "):
-            parts = text.split()
-            if len(parts) < 2:
-                await message.reply_text("❌ دستور: افزودن ادمین موزیک [ایدی]")
-                return
-            try:
-                uid = int(parts[1])
-            except:
-                await message.reply_text("❌ ایدی نامعتبر")
-                return
-            admins = load_admins()
-            if uid in admins:
-                await message.reply_text("⚠️ قبلاً ادمین است")
-                return
-            admins.append(uid)
-            save_admins(admins)
-            await message.reply_text(f"✅ ادمین شد: `{uid}`")
+        # ===== گروه =====
+        if message.chat.type in ["group", "supergroup"]:
+            text = message.text
 
-        elif text.startswith("حذف ادمین موزیک "):
-            parts = text.split()
-            if len(parts) < 2:
-                await message.reply_text("❌ دستور: حذف ادمین موزیک [ایدی]")
-                return
-            try:
-                uid = int(parts[1])
-            except:
-                await message.reply_text("❌ ایدی نامعتبر")
-                return
-            admins = load_admins()
-            if uid not in admins:
-                await message.reply_text("⚠️ ادمین نیست")
-                return
-            admins.remove(uid)
-            save_admins(admins)
-            await message.reply_text(f"✅ حذف شد: `{uid}`")
+            # === پخش ===
+            if text.startswith("پخش "):
+                query = text[3:].strip()
+                if not query:
+                    await message.reply_text("❌ نام موزیک را وارد کن")
+                    return
 
-        elif text == "لیست ادمین‌ها":
-            admins = load_admins()
-            if not admins:
-                await message.reply_text("📋 لیست خالی")
-                return
-            txt = "👑 **ادمین‌ها:**\n"
-            for i, uid in enumerate(admins, 1):
+                # پیام در حال جستجو
+                msg = await message.reply_text(f"🔍 در حال جستجوی: {query}")
+
                 try:
-                    u = await app.get_users(uid)
-                    txt += f"{i}. {u.first_name} (`{uid}`)\n"
-                except:
-                    txt += f"{i}. `{uid}`\n"
-            await message.reply_text(txt)
+                    results = await searcher.search(query)
+                    if not results:
+                        await msg.edit_text("❌ موزیک پیدا نشد")
+                        return
 
-        # ریپلای
-        elif text == "پخش" and message.reply_to_message:
-            replied = message.reply_to_message
-            if replied and replied.text:
-                results = await searcher.search(replied.text)
-                if results:
                     song = results[0]
-                    await player.play(message.chat.id, song)
+                    result_text = await player.play(message.chat.id, song)
                     txt, kb = create_play_message(song, message.chat.id)
-                    await message.reply_text(txt, reply_markup=kb)
+                    await msg.edit_text(txt, reply_markup=kb)
+                    logger.info(f"✅ پخش شد: {song.get('title')}")
+                except Exception as e:
+                    logger.error(f"خطا در پخش: {e}\n{traceback.format_exc()}")
+                    await msg.edit_text(f"❌ خطا در پخش: {str(e)[:100]}")
 
-    # دستور start در پیوی
-    elif message.chat.type == "private" and message.text.startswith("/start"):
-        txt = (
-            "🎵 **ربات موزیک پلیر**\n\n"
-            "📌 **دستورات:**\n"
-            "• `پخش [نام]`\n"
-            "• `پخش لینک [لینک]`\n"
-            "• `توقف` / `ادامه` / `بعدی` / `اتمام`\n"
-            "• `لیست پخش`\n"
-            "• `افزودن ادمین موزیک [ایدی]`"
-        )
-        kb = InlineKeyboardMarkup([
-            [InlineKeyboardButton("➕ افزودن به گروه", url="https://t.me/Player_Boy_bot?startgroup=true")]
-        ])
-        await message.reply_text(txt, reply_markup=kb)
+            # === کنترل ===
+            elif text == "توقف":
+                await player.pause(message.chat.id)
+                await message.reply_text("⏸️ توقف")
+            elif text == "ادامه":
+                await player.resume(message.chat.id)
+                await message.reply_text("▶️ ادامه")
+            elif text == "بعدی":
+                s = await player.skip(message.chat.id)
+                if s:
+                    await message.reply_text(f"⏭️ {s.get('title')}")
+                else:
+                    await message.reply_text("⏹️ پایان لیست")
+            elif text == "اتمام":
+                await player.stop(message.chat.id)
+                await message.reply_text("⏹️ توقف کامل")
+            elif text == "لیست پخش":
+                info = player.get_queue_info(message.chat.id)
+                await message.reply_text(info)
+
+            # === مدیریت ===
+            elif text.startswith("افزودن ادمین موزیک "):
+                parts = text.split()
+                if len(parts) < 2:
+                    await message.reply_text("❌ دستور: افزودن ادمین موزیک [ایدی]")
+                    return
+                try:
+                    uid = int(parts[1])
+                except:
+                    await message.reply_text("❌ ایدی نامعتبر")
+                    return
+                admins = load_admins()
+                if uid in admins:
+                    await message.reply_text("⚠️ قبلاً ادمین است")
+                    return
+                admins.append(uid)
+                save_admins(admins)
+                await message.reply_text(f"✅ ادمین شد: `{uid}`")
+
+            elif text.startswith("حذف ادمین موزیک "):
+                parts = text.split()
+                if len(parts) < 2:
+                    await message.reply_text("❌ دستور: حذف ادمین موزیک [ایدی]")
+                    return
+                try:
+                    uid = int(parts[1])
+                except:
+                    await message.reply_text("❌ ایدی نامعتبر")
+                    return
+                admins = load_admins()
+                if uid not in admins:
+                    await message.reply_text("⚠️ ادمین نیست")
+                    return
+                admins.remove(uid)
+                save_admins(admins)
+                await message.reply_text(f"✅ حذف شد: `{uid}`")
+
+            elif text == "لیست ادمین‌ها":
+                admins = load_admins()
+                if not admins:
+                    await message.reply_text("📋 لیست خالی")
+                    return
+                txt = "👑 **ادمین‌ها:**\n"
+                for i, uid in enumerate(admins, 1):
+                    try:
+                        u = await app.get_users(uid)
+                        txt += f"{i}. {u.first_name} (`{uid}`)\n"
+                    except:
+                        txt += f"{i}. `{uid}`\n"
+                await message.reply_text(txt)
+
+            # === ریپلای ===
+            elif text == "پخش" and message.reply_to_message:
+                replied = message.reply_to_message
+                if replied and replied.text:
+                    msg = await message.reply_text(f"🔍 جستجو: {replied.text[:30]}...")
+                    results = await searcher.search(replied.text)
+                    if results:
+                        song = results[0]
+                        await player.play(message.chat.id, song)
+                        txt, kb = create_play_message(song, message.chat.id)
+                        await msg.edit_text(txt, reply_markup=kb)
+                    else:
+                        await msg.edit_text("❌ پیدا نشد")
+
+    except Exception as e:
+        logger.error(f"خطا در all_messages: {e}\n{traceback.format_exc()}")
+        try:
+            await message.reply_text(f"❌ خطای داخلی: {str(e)[:100]}")
+        except:
+            pass
 
 # ========== دکمه‌ها ==========
 @app.on_callback_query()
 async def callbacks(client, cq: CallbackQuery):
-    data = cq.data
-    chat_id = cq.message.chat.id
-    if data.startswith("pause"):
-        await player.pause(chat_id)
-        await cq.answer("⏸️")
-    elif data.startswith("resume"):
-        await player.resume(chat_id)
-        await cq.answer("▶️")
-    elif data.startswith("skip"):
-        s = await player.skip(chat_id)
-        await cq.answer(f"⏭️ {s.get('title')[:20]}" if s else "پایان")
-    elif data.startswith("stop"):
-        await player.stop(chat_id)
-        await cq.answer("⏹️")
-    elif data.startswith("queue"):
-        await cq.answer("📋")
-        await cq.message.reply_text(player.get_queue_info(chat_id))
+    try:
+        data = cq.data
+        chat_id = cq.message.chat.id
+        if data.startswith("pause"):
+            await player.pause(chat_id)
+            await cq.answer("⏸️")
+        elif data.startswith("resume"):
+            await player.resume(chat_id)
+            await cq.answer("▶️")
+        elif data.startswith("skip"):
+            s = await player.skip(chat_id)
+            await cq.answer(f"⏭️ {s.get('title')[:20]}" if s else "پایان")
+        elif data.startswith("stop"):
+            await player.stop(chat_id)
+            await cq.answer("⏹️")
+        elif data.startswith("queue"):
+            await cq.answer("📋")
+            await cq.message.reply_text(player.get_queue_info(chat_id))
+    except Exception as e:
+        logger.error(f"خطا در callback: {e}\n{traceback.format_exc()}")
+        await cq.answer("❌ خطا", show_alert=True)
 
 # ========== اجرا ==========
 if __name__ == "__main__":
-    print("🚀 ربات یکپارچه با .env در حال اجرا...")
+    print("🚀 ربات یکپارچه با .env و لاگ کامل در حال اجرا...")
     app.run()
