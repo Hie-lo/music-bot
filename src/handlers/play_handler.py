@@ -17,26 +17,29 @@ class PlayHandler:
     
     def register_handlers(self):
         """ثبت هندلرهای پخش"""
+        app = self.app
         
         # هندلر اصلی پخش
-        @self.app.on_message(filters.command("پخش") & filters.group)
+        @app.on_message(filters.command("پخش") & filters.group)
         async def play_command(client, message: Message):
             await self.handle_play(message)
         
         # پخش با لینک
-        @self.app.on_message(filters.command("پخش لینک") & filters.group)
+        @app.on_message(filters.command("پخش لینک") & filters.group)
         async def play_link(client, message: Message):
             await self.handle_play_link(message)
         
         # پخش اختصاصی پلتفرم
-        @self.app.on_message(filters.regex(r'^پخش (یوتیوب|اسپاتیفای|ساندکلاد) .+') & filters.group)
+        @app.on_message(filters.regex(r'^پخش (یوتیوب|اسپاتیفای|ساندکلاد) .+') & filters.group)
         async def play_platform(client, message: Message):
             await self.handle_play_platform(message)
         
         # ریپلای برای پخش دسته‌جمعی
-        @self.app.on_message(filters.command("پخش") & filters.group & filters.reply)
+        @app.on_message(filters.command("پخش") & filters.group & filters.reply)
         async def play_reply(client, message: Message):
             await self.handle_play_reply(message)
+        
+        logger.info("✅ هندلرهای پخش ثبت شدند")
     
     async def handle_play(self, message: Message):
         """مدیریت پخش با سرچ عمومی"""
@@ -181,8 +184,6 @@ class PlayHandler:
             
             # اگه ریپلای روی چند پیام بوده
             if msg.reply_to_message:
-                # اینجا باید پیام‌های ریپلای شده رو جمع کنی
-                # برای سادگی، فعلاً فقط اولین پیام رو می‌گیریم
                 replied_messages.append(msg)
             else:
                 replied_messages.append(msg)

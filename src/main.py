@@ -1,11 +1,22 @@
 import asyncio
 import logging
+import os
+import sys
+from pathlib import Path
+
+# اضافه کردن مسیر پروژه به sys.path
+sys.path.insert(0, str(Path(__file__).parent))
+
 from pyrogram import Client, filters
-from pyrogram.types import Message
+from pyrogram.types import Message, InlineKeyboardMarkup, InlineKeyboardButton
 from config import Config
 from handlers.play_handler import PlayHandler
 from handlers.admin_handler import AdminHandler
 from handlers.control_handler import ControlHandler
+
+# ایجاد پوشه logs اگر وجود نداشت
+if not os.path.exists('logs'):
+    os.makedirs('logs')
 
 # تنظیم لاگ
 logging.basicConfig(
@@ -24,8 +35,7 @@ class MusicBot:
             "musicbot",
             api_id=Config.API_ID,
             api_hash=Config.API_HASH,
-            bot_token=Config.BOT_TOKEN,
-            plugins=dict(root="src/handlers")
+            bot_token=Config.BOT_TOKEN
         )
         
         # نمونه‌سازی هندلرها
@@ -37,38 +47,24 @@ class MusicBot:
         """شروع ربات"""
         logger.info("🚀 ربات موزیک پلیر در حال راه‌اندازی...")
         
-        # ثبت دستورات
-        @self.app.on_message(filters.command(["start", "help"]))
-        async def start_command(client, message: Message):
-            await message.reply_text(
-                "🎵 **ربات موزیک پلیر پیشرفته**\n\n"
-                "📌 **دستورات اصلی:**\n"
-                "• `پخش [نام موزیک]` - جستجو و پخش خودکار\n"
-                "• `پخش یوتیوب [نام]` - جستجو در یوتیوب\n"
-                "• `پخش اسپاتیفای [نام]` - جستجو در اسپاتیفای\n"
-                "• `پخش ساندکلاد [نام]` - جستجو در ساندکلاد\n"
-                "• `پخش لینک [لینک]` - پخش با لینک\n\n"
-                "🎯 **پخش دسته‌جمعی:**\n"
-                "• روی چند پیام ریپلای کن و `پخش` رو بفرست\n\n"
-                "🎮 **کنترل پخش:**\n"
-                "• ⏸️ توقف | ▶️ ادامه | ⏭️ بعدی | ⏹️ اتمام\n"
-                "• 🔁 تکرار | 📋 لیست پخش\n\n"
-                "👑 **مدیریت:**\n"
-                "• `افزودن ادمین موزیک [ایدی]` - افزودن ادمین جدید\n"
-                "• `حذف ادمین موزیک [ایدی]` - حذف ادمین\n\n"
-                "💡 **نکته:** اگه اسپاتیفای تنظیم نشده باشه، ربات خودکار از یوتیوب استفاده می‌کنه.",
-                disable_web_page_preview=True
-            )
+        # ========== ثبت دستورات اصلی ==========
         
-        # ثبت هندلرها
+        # دستور start و help
+        @self.app.on_message(filters.command(["start", "help"]) & (filters.private | filters.group))
+        async def start_command(client, message: Message):
+            await self.send_welcome(message)
+        
+        # ========== ثبت هندلرها ==========
         self.play_handler.register_handlers()
         self.admin_handler.register_handlers()
         self.control_handler.register_handlers()
         
-        # راه‌اندازی ربات
+        # ========== راه‌اندازی ربات ==========
         logger.info("✅ ربات آماده کار است!")
         await self.app.start()
-        logger.info(f"🎵 ربات با نام @{(await self.app.get_me()).username} فعال شد")
+        
+        bot_info = await self.app.get_me()
+        logger.info(f"🎵 ربات با نام @{bot_info.username} فعال شد")
         
         # نگه‌داشتن ربات در حالت اجرا
         await asyncio.Event().wait()
@@ -78,6 +74,96 @@ class MusicBot:
         logger.info("🛑 ربات در حال توقف...")
         await self.app.stop()
         logger.info("✅ ربات متوقف شد")
+    
+    async def send_welcome(self, message: Message):
+        """ارسال پیام خوش‌آمدگویی"""
+        
+        # متن پیام
+        welcome_text = """
+🎵 **به ربات موزیک پلیر خوش آمدید!**
+
+من یک ربات قدرتمند برای پخش موسیقی در گروه‌های تلگرام هستم.
+
+✨ **قابلیت‌ها:**
+• پخش از یوتیوب، اسپاتیفای و ساندکلاد
+• پخش با لینک مستقیم
+• مدیریت صف پخش
+• کنترل کامل با دکمه‌های شیشه‌ای
+• پخش دسته‌جمعی با ریپلای
+
+📌 **دستورات اصلی:**
+• `پخش [نام موزیک]` - جستجو و پخش خودکار
+• `پخش لینک [لینک]` - پخش با لینک
+• `پخش یوتیوب [نام]` - جستجو در یوتیوب
+• `پخش اسپاتیفای [نام]` - جستجو در اسپاتیفای
+
+🎮 **کنترل پخش:**
+• `توقف` - مکث پخش
+• `ادامه` - ادامه پخش
+• `بعدی` - آهنگ بعدی
+• `اتمام` - توقف کامل
+• `لیست پخش` - نمایش صف
+
+👑 **مدیریت:**
+• `افزودن ادمین موزیک [ایدی]` - افزودن ادمین جدید
+
+💡 **نکته:** برای پخش چند موزیک، روی پیام‌ها ریپلای بزنید و `پخش` رو بفرستید.
+"""
+        
+        # دکمه‌ها
+        keyboard = InlineKeyboardMarkup([
+            [
+                InlineKeyboardButton("➕ افزودن به گروه", url="https://t.me/Player_Boy_bot?startgroup=true"),
+                InlineKeyboardButton("📢 کانال", url="https://t.me/your_channel"),
+            ],
+            [
+                InlineKeyboardButton("📖 راهنما", callback_data="help"),
+                InlineKeyboardButton("📊 وضعیت", callback_data="status"),
+            ],
+            [
+                InlineKeyboardButton("🧑‍💻 پشتیبانی", url="https://t.me/your_support"),
+            ]
+        ])
+        
+        # ارسال پیام
+        await message.reply_text(
+            welcome_text,
+            reply_markup=keyboard,
+            disable_web_page_preview=True
+        )
+    
+    async def handle_callback(self, callback_query):
+        """مدیریت دکمه‌های شیشه‌ای"""
+        data = callback_query.data
+        
+        if data == "help":
+            await callback_query.answer("📖 راهنما ارسال شد")
+            await callback_query.message.reply_text(
+                "📖 **راهنمای کامل ربات:**\n\n"
+                "**دستورات پخش:**\n"
+                "• `پخش [نام]` - جستجو در همه پلتفرم‌ها\n"
+                "• `پخش یوتیوب [نام]` - فقط یوتیوب\n"
+                "• `پخش اسپاتیفای [نام]` - فقط اسپاتیفای\n"
+                "• `پخش لینک [لینک]` - پخش مستقیم لینک\n\n"
+                "**کنترل پخش:**\n"
+                "• `توقف` - مکث\n"
+                "• `ادامه` - ادامه\n"
+                "• `بعدی` - آهنگ بعدی\n"
+                "• `اتمام` - توقف کامل\n\n"
+                "**مدیریت:**\n"
+                "• `افزودن ادمین موزیک [ایدی]` - افزودن ادمین\n"
+                "• `حذف ادمین موزیک [ایدی]` - حذف ادمین\n"
+                "• `لیست ادمین‌ها` - نمایش ادمین‌ها"
+            )
+        
+        elif data == "status":
+            await callback_query.answer("📊 وضعیت ربات")
+            # اینجا می‌تونی اطلاعات وضعیت ربات رو بفرستی
+            await callback_query.message.reply_text(
+                "📊 **وضعیت ربات:**\n\n"
+                "✅ **وضعیت:** آنلاین\n"
+                "🎵 **در حال پخش:** -"
+            )
 
 if __name__ == "__main__":
     bot = MusicBot()
