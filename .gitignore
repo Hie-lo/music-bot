@@ -2,29 +2,59 @@
 venv/
 env/
 ENV/
+env.bak/
+venv.bak/
 
-# فایل‌های پایتون
+# فایل‌های کامپایل شده پایتون
 __pycache__/
-*.pyc
-*.pyo
-*.pyd
+*.py[cod]
+*$py.class
+*.so
+.Python
 
-# فایل‌های داده
-data/*.json
+# فایل‌های داده (با داده‌های واقعی)
+data/admins.json
+data/history.json
 !data/.gitkeep
 
 # لاگ‌ها
 logs/*.log
+logs/*.log.*
+!logs/.gitkeep
 
 # متغیرهای محیطی
 .env
+.env.local
+.env.*.local
 
 # فایل‌های سیستمی
 .DS_Store
 Thumbs.db
 *.tmp
+*.swp
+*.swo
 
 # فایل‌های ادیتور
 .vscode/
 .idea/
-*.swp
+*.iml
+*.sublime-*
+
+# فایل‌های آپلود/دانلود
+downloads/
+temp/
+*.mp3
+*.mp4
+*.webm
+
+# فایل‌های اجرایی
+*.exe
+*.bat
+*.sh
+!run.bat
+!run.sh
+!setup.sh
+
+# فایل‌های پیکربندی محلی
+config.local.py
+settings.local.py
