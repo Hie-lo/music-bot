@@ -13,14 +13,14 @@ from config import Config
 from search import SearchManager
 from player import MusicPlayer
 import re
+import json
 
-# ایجاد پوشه logs اگر وجود نداشت
-if not os.path.exists('logs'):
-    os.makedirs('logs')
+# ایجاد پوشه logs
+os.makedirs('logs', exist_ok=True)
 
 # تنظیم لاگ
 logging.basicConfig(
-    level=logging.INFO,
+    level=logging.DEBUG,  # تغییر به DEBUG برای دیباگ کامل
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     handlers=[
         logging.FileHandler('logs/bot.log'),
@@ -29,9 +29,9 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# ایجاد نمونه از کلاس‌ها
+# نمونه‌سازی
 search_manager = SearchManager()
-music_player = MusicPlayer(None)  # موقتاً None
+music_player = None
 
 class MusicBot:
     def __init__(self):
@@ -41,55 +41,58 @@ class MusicBot:
             api_hash=Config.API_HASH,
             bot_token=Config.BOT_TOKEN
         )
-        # به‌روزرسانی music_player با app
         global music_player
         music_player = MusicPlayer(self.app)
         self.music_player = music_player
         self.search_manager = search_manager
     
     async def start(self):
-        """شروع ربات"""
         logger.info("🚀 ربات موزیک پلیر در حال راه‌اندازی...")
         
         # ========== ثبت هندلرها ==========
         self.register_handlers()
         
-        # ========== راه‌اندازی ربات ==========
         logger.info("✅ ربات آماده کار است!")
         await self.app.start()
         
         bot_info = await self.app.get_me()
         logger.info(f"🎵 ربات با نام @{bot_info.username} فعال شد")
         
-        # نگه‌داشتن ربات در حالت اجرا
         await asyncio.Event().wait()
     
     def register_handlers(self):
-        """ثبت همه هندلرها"""
-        app = self.app
+        """ثبت همه هندلرها با روش ساده"""
         
-        # ========== 1. دستور start ==========
-        @app.on_message(filters.command(["start", "help"]))
-        async def start_command(client, message: Message):
-            await self.send_welcome(message)
-        
-        # ========== 2. دستور پخش ==========
-        @app.on_message(filters.text & filters.group)
-        async def handle_messages(client, message: Message):
-            text = message.text or ""
+        # ===== 1. هندلر عمومی برای تمام پیام‌های متنی (برای دیباگ) =====
+        @self.app.on_message(filters.text)
+        async def all_messages(client, message: Message):
+            logger.info(f"📩 پیام جدید: {message.text} | از: {message.from_user.id} | گروه: {message.chat.id}")
             
-            # پخش با ریپلای
-            if text == "پخش" and message.reply_to_message:
-                await self.handle_play_reply(message)
+            # اگه پیام در گروه نیست، نادیده بگیر
+            if not message.chat.type in ["group", "supergroup"]:
+                await message.reply_text("🤖 این ربات فقط در گروه‌ها کار می‌کند!")
                 return
             
-            # پخش لینک
+            text = message.text or ""
+            
+            # ===== دستور start =====
+            if text.startswith("/start") or text.startswith("/help"):
+                await self.send_welcome(message)
+                return
+            
+            # ===== دستور پخش =====
+            if text.startswith("پخش "):
+                query = text[3:].strip()
+                await self.handle_play(message, query)
+                return
+            
+            # ===== دستور پخش لینک =====
             if text.startswith("پخش لینک "):
                 link = text[8:].strip()
                 await self.handle_play_link(message, link)
                 return
             
-            # پخش در پلتفرم خاص
+            # ===== دستور پخش در پلتفرم خاص =====
             platform_match = re.match(r'^پخش (یوتیوب|اسپاتیفای|ساندکلاد) (.+)$', text)
             if platform_match:
                 platform = platform_match.group(1)
@@ -97,13 +100,7 @@ class MusicBot:
                 await self.handle_play_platform(message, platform, query)
                 return
             
-            # پخش معمولی
-            if text.startswith("پخش "):
-                query = text[3:].strip()
-                await self.handle_play(message, query)
-                return
-            
-            # دستورات کنترلی
+            # ===== دستورات کنترل =====
             if text == "توقف":
                 await self.pause_song(message)
                 return
@@ -120,7 +117,7 @@ class MusicBot:
                 await self.show_queue(message)
                 return
             
-            # دستورات مدیریتی
+            # ===== دستورات مدیریت =====
             if text.startswith("افزودن ادمین موزیک "):
                 await self.add_admin(message)
                 return
@@ -130,36 +127,51 @@ class MusicBot:
             if text == "لیست ادمین‌ها":
                 await self.list_admins(message)
                 return
+            
+            # ===== دستور پخش با ریپلای =====
+            if text == "پخش" and message.reply_to_message:
+                await self.handle_play_reply(message)
+                return
+            
+            # ===== اگه هیچکدوم نبود =====
+            # برای دیباگ: به کاربر بگو که دستور پشتیبانی نمیشه
+            # (در حالت عادی این خط رو کامنت کن)
+            # await message.reply_text("❌ دستور نامعتبر! برای راهنما /start رو بفرست.")
         
-        # ========== 3. دکمه‌های شیشه‌ای ==========
-        @app.on_callback_query()
+        # ===== 2. هندلر دکمه‌های شیشه‌ای =====
+        @self.app.on_callback_query()
         async def callback_handler(client, callback_query: CallbackQuery):
+            logger.info(f"🔘 دکمه فشرده شد: {callback_query.data}")
             await self.handle_callback(callback_query)
         
         logger.info("✅ همه هندلرها ثبت شدند")
     
-    # ========== توابع پخش ==========
+    # ========== توابع اصلی ==========
     
     async def handle_play(self, message: Message, query: str):
         """پخش با سرچ"""
         try:
+            logger.info(f"🎵 درخواست پخش: {query}")
+            
             if not query:
                 await message.reply_text("❌ لطفاً نام موزیک را وارد کنید!")
                 return
             
-            await message.reply_text(f"🔍 در حال جستجوی: {query}")
+            msg = await message.reply_text(f"🔍 در حال جستجوی: {query}")
             
             results = await self.search_manager.search_with_fallback(query)
             
             if not results:
-                await message.reply_text("❌ موزیک مورد نظر پیدا نشد!")
+                await msg.edit_text("❌ موزیک مورد نظر پیدا نشد!")
                 return
             
             song = results[0]
+            logger.info(f"✅ پیدا شد: {song.title} - {song.platform}")
+            
             audio_url = await self.search_manager.get_audio_url(song.url, song.platform)
             
             if not audio_url:
-                await message.reply_text("❌ خطا در دریافت لینک پخش!")
+                await msg.edit_text("❌ خطا در دریافت لینک پخش!")
                 return
             
             success = await self.music_player.play_song(
@@ -170,19 +182,18 @@ class MusicBot:
             
             if success:
                 await self._send_play_message(message, song)
+                await msg.delete()
             else:
-                await message.reply_text("❌ خطا در پخش موزیک!")
+                await msg.edit_text("❌ خطا در پخش موزیک!")
                 
         except Exception as e:
-            logger.error(f"خطا در پخش: {e}")
+            logger.error(f"❌ خطا در پخش: {e}", exc_info=True)
             await message.reply_text(f"❌ خطا: {str(e)}")
     
     async def handle_play_link(self, message: Message, link: str):
         """پخش با لینک"""
         try:
-            if not link:
-                await message.reply_text("❌ لطفاً لینک را وارد کنید!")
-                return
+            logger.info(f"🔗 درخواست پخش لینک: {link}")
             
             platform = self._detect_platform(link)
             audio_url = await self.search_manager.get_audio_url(link, platform)
@@ -212,12 +223,14 @@ class MusicBot:
                 await message.reply_text("❌ خطا در پخش موزیک!")
                 
         except Exception as e:
-            logger.error(f"خطا در پخش لینک: {e}")
+            logger.error(f"❌ خطا در پخش لینک: {e}", exc_info=True)
             await message.reply_text(f"❌ خطا: {str(e)}")
     
     async def handle_play_platform(self, message: Message, platform: str, query: str):
         """پخش در پلتفرم خاص"""
         try:
+            logger.info(f"🎵 درخواست پخش در {platform}: {query}")
+            
             results = await self.search_manager.search(query, platform)
             
             if not results:
@@ -247,7 +260,7 @@ class MusicBot:
                 await message.reply_text("❌ خطا در پخش موزیک!")
                 
         except Exception as e:
-            logger.error(f"خطا در پخش پلتفرم: {e}")
+            logger.error(f"❌ خطا در پخش پلتفرم: {e}", exc_info=True)
             await message.reply_text(f"❌ خطا: {str(e)}")
     
     async def handle_play_reply(self, message: Message):
@@ -255,6 +268,7 @@ class MusicBot:
         try:
             msg = message.reply_to_message
             if msg and msg.text:
+                logger.info(f"📎 ریپلای: {msg.text}")
                 results = await self.search_manager.search_with_fallback(msg.text)
                 if results:
                     song = results[0]
@@ -268,7 +282,7 @@ class MusicBot:
                         await self._send_play_message(message, song)
             
         except Exception as e:
-            logger.error(f"خطا در پخش ریپلای: {e}")
+            logger.error(f"❌ خطا در پخش ریپلای: {e}", exc_info=True)
             await message.reply_text(f"❌ خطا: {str(e)}")
     
     # ========== توابع کنترل ==========
@@ -319,14 +333,14 @@ class MusicBot:
     async def add_admin(self, message: Message):
         try:
             parts = message.text.split()
-            if len(parts) < 2:
+            user_id = int(parts[1]) if len(parts) > 1 and not message.reply_to_message else (
+                message.reply_to_message.from_user.id if message.reply_to_message else None
+            )
+            
+            if not user_id:
                 await message.reply_text("❌ دستور صحیح: `افزودن ادمین موزیک [ایدی]`")
                 return
             
-            user_id = int(parts[1]) if not message.reply_to_message else message.reply_to_message.from_user.id
-            
-            # بارگذاری و ذخیره ادمین‌ها
-            import json
             admins = []
             try:
                 with open(Config.ADMINS_FILE, 'r') as f:
@@ -350,11 +364,13 @@ class MusicBot:
     async def remove_admin(self, message: Message):
         try:
             parts = message.text.split()
-            if len(parts) < 2:
+            user_id = int(parts[1]) if len(parts) > 1 and not message.reply_to_message else (
+                message.reply_to_message.from_user.id if message.reply_to_message else None
+            )
+            
+            if not user_id:
                 await message.reply_text("❌ دستور صحیح: `حذف ادمین موزیک [ایدی]`")
                 return
-            
-            user_id = int(parts[1]) if not message.reply_to_message else message.reply_to_message.from_user.id
             
             import json
             admins = []
@@ -469,7 +485,7 @@ class MusicBot:
                 )
             
         except Exception as e:
-            logger.error(f"خطا در callback: {e}")
+            logger.error(f"❌ خطا در callback: {e}")
             await callback_query.answer("❌ خطا!", show_alert=True)
     
     async def send_welcome(self, message: Message):
@@ -521,4 +537,4 @@ if __name__ == "__main__":
     except KeyboardInterrupt:
         logger.info("⏹️ ربات متوقف شد")
     except Exception as e:
-        logger.error(f"❌ خطا: {e}")
+        logger.error(f"❌ خطا: {e}", exc_info=True)
