@@ -1,9 +1,7 @@
 from pyrogram import Client, filters
-from pyrogram.types import Message, InlineKeyboardMarkup, InlineKeyboardButton
-from pyrogram.enums import ChatType
+from pyrogram.types import Message
 from search import SearchManager
 from player import MusicPlayer
-from config import Config
 import logging
 import re
 
@@ -19,33 +17,38 @@ class PlayHandler:
         """ثبت هندلرهای پخش"""
         app = self.app
         
-        # هندلر اصلی پخش
-        @app.on_message(filters.command("پخش") & filters.group)
+        # هندلر اصلی پخش با filters.text
+        @app.on_message(filters.text & filters.group)
         async def play_command(client, message: Message):
-            await self.handle_play(message)
-        
-        # پخش با لینک
-        @app.on_message(filters.command("پخش لینک") & filters.group)
-        async def play_link(client, message: Message):
-            await self.handle_play_link(message)
-        
-        # پخش اختصاصی پلتفرم
-        @app.on_message(filters.regex(r'^پخش (یوتیوب|اسپاتیفای|ساندکلاد) .+') & filters.group)
-        async def play_platform(client, message: Message):
-            await self.handle_play_platform(message)
-        
-        # ریپلای برای پخش دسته‌جمعی
-        @app.on_message(filters.command("پخش") & filters.group & filters.reply)
-        async def play_reply(client, message: Message):
-            await self.handle_play_reply(message)
+            text = message.text or ""
+            
+            # دستورات پخش با ریپلای
+            if text == "پخش" and message.reply_to_message:
+                await self.handle_play_reply(message)
+            
+            # پخش با اسم
+            elif text.startswith("پخش "):
+                query = text[3:].strip()
+                await self.handle_play(message, query)
+            
+            # پخش لینک
+            elif text.startswith("پخش لینک "):
+                link = text[8:].strip()
+                await self.handle_play_link(message, link)
+            
+            # پخش در پلتفرم خاص
+            elif re.match(r'^پخش (یوتیوب|اسپاتیفای|ساندکلاد) .+', text):
+                parts = text.split(" ", 2)
+                if len(parts) >= 3:
+                    platform = parts[1]
+                    query = parts[2]
+                    await self.handle_play_platform(message, platform, query)
         
         logger.info("✅ هندلرهای پخش ثبت شدند")
     
-    async def handle_play(self, message: Message):
+    async def handle_play(self, message: Message, query: str):
         """مدیریت پخش با سرچ عمومی"""
         try:
-            # گرفتن اسم موزیک از پیام
-            query = message.text.replace("پخش", "").strip()
             if not query:
                 await message.reply_text("❌ لطفاً نام موزیک را وارد کنید!")
                 return
@@ -83,11 +86,9 @@ class PlayHandler:
             logger.error(f"خطا در پخش: {e}")
             await message.reply_text("❌ خطایی رخ داد! لطفاً دوباره تلاش کنید.")
     
-    async def handle_play_link(self, message: Message):
+    async def handle_play_link(self, message: Message, link: str):
         """مدیریت پخش با لینک"""
         try:
-            # استخراج لینک از پیام
-            link = message.text.replace("پخش لینک", "").strip()
             if not link:
                 await message.reply_text("❌ لطفاً لینک را وارد کنید!")
                 return
@@ -127,18 +128,9 @@ class PlayHandler:
             logger.error(f"خطا در پخش لینک: {e}")
             await message.reply_text("❌ خطایی رخ داد! لطفاً دوباره تلاش کنید.")
     
-    async def handle_play_platform(self, message: Message):
+    async def handle_play_platform(self, message: Message, platform: str, query: str):
         """مدیریت پخش در پلتفرم مشخص"""
         try:
-            # استخراج پلتفرم و کوئری
-            parts = message.text.split(" ", 2)
-            if len(parts) < 3:
-                await message.reply_text("❌ دستور صحیح: `پخش [پلتفرم] [نام موزیک]`")
-                return
-            
-            platform = parts[1]
-            query = parts[2]
-            
             # جستجو در پلتفرم مشخص
             results = await self.search_manager.search(query, platform)
             
@@ -178,31 +170,20 @@ class PlayHandler:
     async def handle_play_reply(self, message: Message):
         """مدیریت پخش با ریپلای"""
         try:
-            # گرفتن پیام‌های ریپلای شده
-            replied_messages = []
             msg = message.reply_to_message
-            
-            # اگه ریپلای روی چند پیام بوده
-            if msg.reply_to_message:
-                replied_messages.append(msg)
-            else:
-                replied_messages.append(msg)
-            
-            # پردازش هر پیام
-            for msg in replied_messages:
-                if msg.text:
-                    # جستجو با متن پیام
-                    results = await self.search_manager.search_with_fallback(msg.text)
-                    if results:
-                        song = results[0]
-                        audio_url = await self.search_manager.get_audio_url(song.url, song.platform)
-                        if audio_url:
-                            await self.music_player.play_song(
-                                message.chat.id,
-                                audio_url,
-                                song.to_dict()
-                            )
-                            await self._send_play_message(message, song)
+            if msg and msg.text:
+                # جستجو با متن پیام
+                results = await self.search_manager.search_with_fallback(msg.text)
+                if results:
+                    song = results[0]
+                    audio_url = await self.search_manager.get_audio_url(song.url, song.platform)
+                    if audio_url:
+                        await self.music_player.play_song(
+                            message.chat.id,
+                            audio_url,
+                            song.to_dict()
+                        )
+                        await self._send_play_message(message, song)
             
         except Exception as e:
             logger.error(f"خطا در پخش ریپلای: {e}")

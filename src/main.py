@@ -8,7 +8,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent))
 
 from pyrogram import Client, filters
-from pyrogram.types import Message, InlineKeyboardMarkup, InlineKeyboardButton
+from pyrogram.types import Message, InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery
 from config import Config
 from handlers.play_handler import PlayHandler
 from handlers.admin_handler import AdminHandler
@@ -47,14 +47,24 @@ class MusicBot:
         """شروع ربات"""
         logger.info("🚀 ربات موزیک پلیر در حال راه‌اندازی...")
         
-        # ========== ثبت دستورات اصلی ==========
+        # ========== ثبت دستورات اصلی با استفاده از filters.text ==========
         
         # دستور start و help
         @self.app.on_message(filters.command(["start", "help"]) & (filters.private | filters.group))
         async def start_command(client, message: Message):
             await self.send_welcome(message)
         
-        # ========== ثبت هندلرها ==========
+        # دستورات فارسی با filters.text
+        @self.app.on_message(filters.text & filters.group)
+        async def handle_text_messages(client, message: Message):
+            await self.handle_text_message(message)
+        
+        # ========== ثبت هندلرهای callback ==========
+        @self.app.on_callback_query()
+        async def callback_handler(client, callback_query: CallbackQuery):
+            await self.handle_callback(callback_query)
+        
+        # ========== ثبت هندلرهای اختصاصی ==========
         self.play_handler.register_handlers()
         self.admin_handler.register_handlers()
         self.control_handler.register_handlers()
@@ -74,6 +84,29 @@ class MusicBot:
         logger.info("🛑 ربات در حال توقف...")
         await self.app.stop()
         logger.info("✅ ربات متوقف شد")
+    
+    async def handle_text_message(self, message: Message):
+        """مدیریت پیام‌های متنی در گروه"""
+        text = message.text or ""
+        
+        # شروع با / رو نادیده بگیر (برای دستورات انگلیسی)
+        if text.startswith('/'):
+            return
+        
+        # دستورات فارسی
+        if text.startswith('پخش '):
+            # این توسط play_handler مدیریت میشه
+            pass
+        elif text == 'توقف':
+            await self.control_handler.pause_song(message)
+        elif text == 'ادامه':
+            await self.control_handler.resume_song(message)
+        elif text == 'بعدی':
+            await self.control_handler.skip_song(message)
+        elif text == 'اتمام':
+            await self.control_handler.stop_song(message)
+        elif text == 'لیست پخش':
+            await self.control_handler.show_queue(message)
     
     async def send_welcome(self, message: Message):
         """ارسال پیام خوش‌آمدگویی"""
@@ -132,7 +165,7 @@ class MusicBot:
             disable_web_page_preview=True
         )
     
-    async def handle_callback(self, callback_query):
+    async def handle_callback(self, callback_query: CallbackQuery):
         """مدیریت دکمه‌های شیشه‌ای"""
         data = callback_query.data
         
@@ -158,12 +191,15 @@ class MusicBot:
         
         elif data == "status":
             await callback_query.answer("📊 وضعیت ربات")
-            # اینجا می‌تونی اطلاعات وضعیت ربات رو بفرستی
             await callback_query.message.reply_text(
                 "📊 **وضعیت ربات:**\n\n"
                 "✅ **وضعیت:** آنلاین\n"
                 "🎵 **در حال پخش:** -"
             )
+        
+        else:
+            # هندل کردن دکمه‌های کنترلی
+            await self.control_handler.handle_callback(callback_query)
 
 if __name__ == "__main__":
     bot = MusicBot()

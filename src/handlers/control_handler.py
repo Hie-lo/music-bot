@@ -14,32 +14,9 @@ class ControlHandler:
     
     def register_handlers(self):
         """ثبت هندلرهای کنترلی"""
-        
-        # دستورات متنی
-        @self.app.on_message(filters.command(["توقف", "pause"]) & filters.group)
-        async def pause_command(client, message: Message):
-            await self.pause_song(message)
-        
-        @self.app.on_message(filters.command(["ادامه", "resume"]) & filters.group)
-        async def resume_command(client, message: Message):
-            await self.resume_song(message)
-        
-        @self.app.on_message(filters.command(["بعدی", "skip"]) & filters.group)
-        async def skip_command(client, message: Message):
-            await self.skip_song(message)
-        
-        @self.app.on_message(filters.command(["اتمام", "stop"]) & filters.group)
-        async def stop_command(client, message: Message):
-            await self.stop_song(message)
-        
-        @self.app.on_message(filters.command(["لیست پخش", "queue"]) & filters.group)
-        async def queue_command(client, message: Message):
-            await self.show_queue(message)
-        
-        # دکمه‌های شیشه‌ای (Callback)
-        @self.app.on_callback_query()
-        async def callback_handler(client, callback_query: CallbackQuery):
-            await self.handle_callback(callback_query)
+        # هندلرهای کنترلی با filters.text در main.py مدیریت میشن
+        # اینجا فقط برای ثبت callback ها هست
+        pass
     
     async def pause_song(self, message: Message):
         """مکث کردن پخش"""
@@ -140,7 +117,6 @@ class ControlHandler:
                 await callback_query.answer("▶️ پخش ادامه یافت")
             
             elif data.startswith("skip"):
-                # چک کردن دسترسی
                 if await self.is_authorized_callback(callback_query):
                     next_song = await self.music_player.skip_song(chat_id)
                     if next_song:
@@ -163,11 +139,7 @@ class ControlHandler:
                 await callback_query.message.reply_text(queue_info)
             
             elif data.startswith("repeat"):
-                # قابلیت تکرار
                 await callback_query.answer("🔄 حالت تکرار فعال شد", show_alert=True)
-            
-            # ویرایش پیام (اختیاری - می‌تونه پیام رو آپدیت کنه)
-            # await callback_query.message.edit_text("...")
             
         except Exception as e:
             logger.error(f"خطا در پردازش callback: {e}")
@@ -175,8 +147,6 @@ class ControlHandler:
     
     async def is_authorized(self, message: Message) -> bool:
         """چک کردن دسترسی کاربر به کنترل آهنگ"""
-        # اینجا می‌تونی منطق دسترسی رو پیاده‌سازی کنی
-        # مثلاً ادمین‌ها و کسی که آهنگ رو اضافه کرده
         from handlers.admin_handler import AdminHandler
         admin_handler = AdminHandler(self.app)
         return await admin_handler.is_admin(message.from_user.id)
