@@ -9,20 +9,25 @@ from dotenv import load_dotenv
 from pyrogram import Client, filters
 from pyrogram.types import Message, InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery
 
-# pytgcalls
-from pytgcalls import PyTgCalls
-from pytgcalls.types import MediaStream
-from pytgcalls.exceptions import NoActiveGroupCall
+# تلاش برای import pytgcalls
+try:
+    from pytgcalls import PyTgCalls
+    from pytgcalls.types import MediaStream
+    from pytgcalls.exceptions import NoActiveGroupCall
+    PYTGCALLS_AVAILABLE = True
+except ImportError:
+    PYTGCALLS_AVAILABLE = False
+    logging.warning("⚠️ pytgcalls نصب نیست! پخش صدا کار نمی‌کند.")
 
 load_dotenv()
 
 API_ID = int(os.getenv("API_ID", 0))
 API_HASH = os.getenv("API_HASH")
 BOT_TOKEN = os.getenv("BOT_TOKEN")
-SESSION_STRING = os.getenv("SESSION_STRING")  # اکانت کاربری
+SESSION_STRING = os.getenv("SESSION_STRING")
 
-if not API_ID or not API_HASH or not BOT_TOKEN or not SESSION_STRING:
-    raise ValueError("❌ اطلاعات API یا SESSION_STRING در فایل .env پیدا نشد!")
+if not API_ID or not API_HASH or not BOT_TOKEN:
+    raise ValueError("❌ اطلاعات API در فایل .env پیدا نشد!")
 
 ADMINS_FILE = "admins.json"
 
@@ -80,95 +85,119 @@ class QueueManager:
                 txt += f"... و {len(queue)-5} تا دیگر"
         return txt
 
-# ========== کلاس پخش با pytgcalls ==========
+# ========== کلاس پخش ==========
 class MusicPlayer:
     def __init__(self, app: Client):
         self.app = app
         self.queue = QueueManager()
-        self.pytgcalls = PyTgCalls(app)
+        self.pytgcalls = None
+        if PYTGCALLS_AVAILABLE:
+            try:
+                self.pytgcalls = PyTgCalls(app)
+                logger.info("✅ pytgcalls آماده شد")
+            except Exception as e:
+                logger.error(f"❌ خطا در راه‌اندازی pytgcalls: {e}")
 
     async def start(self):
-        await self.pytgcalls.start()
-        logger.info("✅ pytgcalls راه‌اندازی شد")
+        if self.pytgcalls:
+            try:
+                await self.pytgcalls.start()
+                logger.info("✅ pytgcalls راه‌اندازی شد")
+            except Exception as e:
+                logger.error(f"❌ خطا در start pytgcalls: {e}")
 
     async def join_call(self, chat_id: int):
+        if not self.pytgcalls:
+            raise Exception("pytgcalls در دسترس نیست")
         try:
             await self.pytgcalls.join_group_call(chat_id, MediaStream(""))
             logger.info(f"✅ به کال گروه {chat_id} پیوست")
         except NoActiveGroupCall:
-            logger.warning(f"⚠️ کال فعالی در گروه {chat_id} وجود ندارد")
             raise Exception("❗️ ابتدا یک کال صوتی در گروه شروع کنید.")
         except Exception as e:
-            logger.error(f"❌ خطا در پیوستن به کال {chat_id}: {e}")
+            logger.error(f"❌ خطا در پیوستن به کال: {e}")
             raise
 
     async def leave_call(self, chat_id: int):
+        if not self.pytgcalls:
+            return
         try:
             await self.pytgcalls.leave_group_call(chat_id)
             logger.info(f"✅ از کال گروه {chat_id} خارج شد")
         except Exception as e:
-            logger.error(f"❌ خطا در خروج از کال {chat_id}: {e}")
+            logger.error(f"❌ خطا در خروج از کال: {e}")
 
     async def play(self, chat_id: int, song: Dict, audio_url: str):
+        if not self.pytgcalls:
+            logger.warning("⚠️ pytgcalls در دسترس نیست - فقط شبیه‌سازی")
+            pos = self.queue.add(chat_id, song)
+            if pos == 0:
+                return "در حال پخش (شبیه‌سازی)..."
+            else:
+                return f"به صف اضافه شد (موقعیت {pos})"
+
         try:
             pos = self.queue.add(chat_id, song)
             if pos == 0:
                 await self.join_call(chat_id)
                 await self.pytgcalls.change_stream(chat_id, MediaStream(audio_url))
-                logger.info(f"🎵 در حال پخش: {song.get('title')}")
                 return "در حال پخش..."
             else:
-                logger.info(f"➕ به صف اضافه شد: {song.get('title')} (موقعیت {pos})")
                 return f"به صف اضافه شد (موقعیت {pos})"
         except Exception as e:
             logger.error(f"خطا در پخش: {e}")
             raise
 
     async def pause(self, chat_id: int):
+        if not self.pytgcalls:
+            return "توقف (شبیه‌سازی)"
         try:
             await self.pytgcalls.pause_stream(chat_id)
-            logger.info(f"⏸️ توقف در {chat_id}")
             return "توقف"
         except Exception as e:
             logger.error(f"خطا در توقف: {e}")
             raise
 
     async def resume(self, chat_id: int):
+        if not self.pytgcalls:
+            return "ادامه (شبیه‌سازی)"
         try:
             await self.pytgcalls.resume_stream(chat_id)
-            logger.info(f"▶️ ادامه در {chat_id}")
             return "ادامه"
         except Exception as e:
             logger.error(f"خطا در ادامه: {e}")
             raise
 
     async def skip(self, chat_id: int):
-        next_song = self.queue.next(chat_id)
-        if next_song:
-            # اینجا باید لینک واقعی رو دریافت کنی - فعلاً نمونه
-            audio_url = "https://www.soundhelix.com/examples/mp3/SoundHelix-Song-1.mp3"
-            await self.pytgcalls.change_stream(chat_id, MediaStream(audio_url))
-            logger.info(f"⏭️ پخش آهنگ بعدی: {next_song.get('title')}")
+        if not self.pytgcalls:
+            next_song = self.queue.next(chat_id)
             return next_song
-        else:
-            await self.leave_call(chat_id)
-            self.queue.clear(chat_id)
-            return None
+
+        try:
+            next_song = self.queue.next(chat_id)
+            if next_song:
+                await self.pytgcalls.change_stream(chat_id, MediaStream(next_song["url"]))
+                return next_song
+            else:
+                await self.leave_call(chat_id)
+                self.queue.clear(chat_id)
+                return None
+        except Exception as e:
+            logger.error(f"خطا در skip: {e}")
+            raise
 
     async def stop(self, chat_id: int):
         await self.leave_call(chat_id)
         self.queue.clear(chat_id)
-        logger.info(f"⏹️ توقف کامل در {chat_id}")
         return "توقف کامل"
 
     def get_queue_info(self, chat_id: int) -> str:
         return self.queue.get_info(chat_id)
 
-# ========== کلاس جستجو (موقت) ==========
+# ========== کلاس جستجو ==========
 class SearchManager:
     async def search(self, query: str) -> Optional[Dict]:
         logger.info(f"🔍 جستجو برای: {query}")
-        # فعلاً یک نتیجه نمونه با لینک تست
         return {
             "title": f"🎵 {query}",
             "url": "https://www.soundhelix.com/examples/mp3/SoundHelix-Song-1.mp3",
@@ -183,7 +212,7 @@ app = Client(
     api_id=API_ID,
     api_hash=API_HASH,
     bot_token=BOT_TOKEN,
-    session_string=SESSION_STRING
+    session_string=SESSION_STRING if SESSION_STRING else None
 )
 
 player = MusicPlayer(app)
@@ -257,11 +286,11 @@ async def control_commands(client, message: Message):
     chat_id = message.chat.id
     try:
         if text == "توقف":
-            await player.pause(chat_id)
-            await message.reply_text("⏸️ توقف")
+            result = await player.pause(chat_id)
+            await message.reply_text(f"⏸️ {result}")
         elif text == "ادامه":
-            await player.resume(chat_id)
-            await message.reply_text("▶️ ادامه")
+            result = await player.resume(chat_id)
+            await message.reply_text(f"▶️ {result}")
         elif text == "بعدی":
             s = await player.skip(chat_id)
             if s:
@@ -269,8 +298,8 @@ async def control_commands(client, message: Message):
             else:
                 await message.reply_text("⏹️ پایان لیست")
         elif text == "اتمام":
-            await player.stop(chat_id)
-            await message.reply_text("⏹️ توقف کامل")
+            result = await player.stop(chat_id)
+            await message.reply_text(f"⏹️ {result}")
         elif text == "لیست پخش":
             info = player.get_queue_info(chat_id)
             await message.reply_text(info)
@@ -372,7 +401,7 @@ async def callbacks(client, cq: CallbackQuery):
 async def main():
     await app.start()
     await player.start()
-    logger.info("🚀 ربات با pytgcalls راه‌اندازی شد!")
+    logger.info("🚀 ربات راه‌اندازی شد!")
     await asyncio.Event().wait()
 
 if __name__ == "__main__":
