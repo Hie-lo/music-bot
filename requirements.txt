@@ -1,0 +1,8 @@
+pyrogram
+py-tgcalls
+yt-dlp
+spotipy
+python-dotenv
+aiofiles
+asyncio
+requests

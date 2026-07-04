@@ -1,0 +1,30 @@
+# محیط مجازی
+venv/
+env/
+ENV/
+
+# فایل‌های پایتون
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# فایل‌های داده
+data/*.json
+!data/.gitkeep
+
+# لاگ‌ها
+logs/*.log
+
+# متغیرهای محیطی
+.env
+
+# فایل‌های سیستمی
+.DS_Store
+Thumbs.db
+*.tmp
+
+# فایل‌های ادیتور
+.vscode/
+.idea/
+*.swp
